@@ -21,7 +21,7 @@ pub enum AddressFamily {
 
 #[derive(Debug)]
 pub enum LoadBalancing {
-    /// Always choose the first address resolved DNS records
+    /// Choose the first address from resolved DNS records
     First,
     /// Randomly choose an address from resolved DNS records
     Random,
