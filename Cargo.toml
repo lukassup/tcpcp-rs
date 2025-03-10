@@ -1,0 +1,9 @@
+[package]
+name = "tcpconnpool"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+async-std = { version = "1.13.0", features = ["attributes"] }
+deadpool = { version = "0.12.2", features = ["rt_async-std_1"] }
+rand = "0.9.0"
