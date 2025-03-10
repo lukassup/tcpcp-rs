@@ -1,6 +1,3 @@
-// cargo add async_std --features attributes
-// cargo add deadpool --features rt_async-std_1
-// cargo add rand
 
 use async_std::io;
 use async_std::net::SocketAddr;
@@ -12,13 +9,18 @@ use deadpool::managed;
 use rand::seq::IndexedRandom;
 use std::sync::Arc;
 
+/// Address family preference
 #[derive(Debug)]
 pub enum AddressFamily {
+    /// Either IPv4 or IPv6
     Any,
+    /// IPv4 only
     IPv4,
+    /// IPv6 only
     IPv6,
 }
 
+/// Connection load balancing algorithm
 #[derive(Debug)]
 pub enum LoadBalancing {
     /// Choose the first address from resolved DNS records
@@ -83,6 +85,7 @@ impl managed::Manager for TcpConnectionManager {
 
     async fn create(&self) -> Result<Self::Type, Self::Error> {
         let addr = self.get_addr().await;
+        dbg!(addr);
         Self::Type::connect(addr).await
     }
 
@@ -104,7 +107,7 @@ async fn main() -> io::Result<()> {
     let pool = TcpConnectionPool::builder(
         TcpConnectionManager::new(
             format!("{host}:{port}"),
-            AddressFamily::IPv4,
+            AddressFamily::Any,
             LoadBalancing::Random,
         )
         .await?,
