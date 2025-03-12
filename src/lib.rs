@@ -1,12 +1,13 @@
-use async_std::io;
+pub use async_std::io;
+pub use async_std::prelude::*;
+
 use async_std::net::SocketAddr;
 use async_std::net::TcpStream;
 use async_std::net::ToSocketAddrs;
-use async_std::prelude::*;
+use async_std::sync::Arc;
 use async_std::sync::Mutex;
 use deadpool::managed;
 use rand::seq::IndexedRandom;
-use std::sync::Arc;
 
 /// Address family preference
 #[derive(Debug)]
@@ -30,6 +31,8 @@ pub enum LoadBalancing {
     Next,
 }
 
+pub type TcpConnectionPool = managed::Pool<TcpConnectionManager>;
+
 #[derive(Debug)]
 pub struct TcpConnectionManager {
     pub addrs: Vec<SocketAddr>,
@@ -37,7 +40,7 @@ pub struct TcpConnectionManager {
     lb_algorithm: LoadBalancing,
 }
 
-pub impl TcpConnectionManager {
+impl TcpConnectionManager {
     pub async fn new(
         addrs: impl ToSocketAddrs,
         address_family: AddressFamily,
@@ -78,7 +81,7 @@ pub impl TcpConnectionManager {
     }
 }
 
-pub impl managed::Manager for TcpConnectionManager {
+impl managed::Manager for TcpConnectionManager {
     type Type = TcpStream;
     type Error = io::Error;
 
@@ -96,5 +99,3 @@ pub impl managed::Manager for TcpConnectionManager {
         Ok(())
     }
 }
-
-pub type TcpConnectionPool = managed::Pool<TcpConnectionManager>;
