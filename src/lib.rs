@@ -1,13 +1,17 @@
 pub use async_std::io;
+use async_std::io::ReadExt;
 pub use async_std::prelude::*;
 
 use async_std::net::SocketAddr;
 use async_std::net::TcpStream;
 use async_std::net::ToSocketAddrs;
 use async_std::sync::Arc;
-use async_std::sync::Mutex;
+use async_std::task;
+use core::time;
 use deadpool::managed;
 use rand::seq::IndexedRandom;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 
 /// Address family preference
 #[derive(Debug)]
@@ -32,12 +36,14 @@ pub enum LoadBalancing {
 }
 
 pub type TcpConnectionPool = managed::Pool<TcpConnectionManager>;
+pub type TcpConnectionObject = managed::Object<TcpConnectionManager>;
 
 #[derive(Debug)]
 pub struct TcpConnectionManager {
     pub addrs: Vec<SocketAddr>,
-    addr_index_next: Arc<Mutex<usize>>,
+    addr_index_next: Arc<AtomicUsize>,
     lb_algorithm: LoadBalancing,
+    max_requests: usize,
 }
 
 impl TcpConnectionManager {
@@ -45,8 +51,10 @@ impl TcpConnectionManager {
         addrs: impl ToSocketAddrs,
         address_family: AddressFamily,
         lb_algorithm: LoadBalancing,
+        max_requests: usize,
     ) -> io::Result<Self> {
         Ok(Self {
+            addr_index_next: Arc::new(AtomicUsize::new(0)),
             addrs: addrs
                 .to_socket_addrs()
                 .await?
@@ -56,11 +64,12 @@ impl TcpConnectionManager {
                     AddressFamily::IPv6 => a.is_ipv6(),
                 })
                 .collect(),
-            addr_index_next: Arc::new(Mutex::new(0)),
             lb_algorithm,
+            max_requests,
         })
     }
 
+    /// Selects and returns a SocketAddr using configured lb_algorithm
     pub async fn get_addr(&self) -> SocketAddr {
         match self.lb_algorithm {
             LoadBalancing::First => *self.addrs.first().unwrap(),
@@ -69,13 +78,14 @@ impl TcpConnectionManager {
                 *self.addrs.choose(&mut rng).unwrap()
             }
             LoadBalancing::Next => {
-                // Return self.addrs[self.addr_index_next]
-                // Do wrapping increment with Mutex::lock() to prevent multiple
-                // threads from updating it
-                let mut curr_index = self.addr_index_next.lock().await;
-                let addr = self.addrs.get(*curr_index).unwrap();
-                *curr_index = (*curr_index + 1) % self.addrs.len();
-                *addr
+                // wrapping atomic increment for async/thread safety
+                let curr_index = self
+                    .addr_index_next
+                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |i| {
+                        Some((i + 1) % self.addrs.len())
+                    })
+                    .unwrap();
+                *self.addrs.get(curr_index).unwrap()
             }
         }
     }
@@ -93,9 +103,24 @@ impl managed::Manager for TcpConnectionManager {
 
     async fn recycle(
         &self,
-        _: &mut Self::Type,
-        _: &managed::Metrics,
+        stream: &mut Self::Type,
+        metrics: &managed::Metrics,
     ) -> managed::RecycleResult<Self::Error> {
-        Ok(())
+        if metrics.recycle_count + 1 >= self.max_requests {
+            return Err(managed::RecycleError::message("max requests reached"));
+        }
+        // try reading zero bytes
+        let Err(e) = stream.read(&mut []).await else {
+            return Ok(());
+        };
+        match e.kind() {
+            // retryable - connection reused
+            io::ErrorKind::WouldBlock => Ok(()),
+            // non-retryable - new connection created
+            _ => {
+                task::sleep(time::Duration::from_millis(3000)).await;
+                Err(managed::RecycleError::from(dbg!(e)))
+            }
+        }
     }
 }

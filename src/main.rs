@@ -1,14 +1,31 @@
+// use async_std::task;
+// use core::time;
+
 use tcpconnpool::*;
 
 #[async_std::main]
 async fn main() -> io::Result<()> {
-    let host = "one.one.one.one";
+    // let host = "one.one.one.one";
+    // let ka = "keep-alive";
+    let host = "raw.githubusercontent.com";
+    let ka = "close";
+    let ua = "curl/8.7.1";
     let port: u16 = 80;
+    let req = format!(
+        "GET / HTTP/1.1\r\n\
+        Host: {host}\r\n\
+        Connection: {ka}\r\n\
+        User-Agent: {ua}\r\n\
+        Accept: */*\r\n\
+        \r\n\
+        "
+    );
     let pool = TcpConnectionPool::builder(
         TcpConnectionManager::new(
             format!("{host}:{port}"),
             AddressFamily::IPv4,
-            LoadBalancing::Random,
+            LoadBalancing::Next,
+            10, // max_requests: 1 - disable keepalive
         )
         .await?,
     )
@@ -16,44 +33,31 @@ async fn main() -> io::Result<()> {
     .unwrap();
     dbg!(&pool.manager().addrs);
 
-    // acquire connection from pool
-    let mut conn1 = pool.get().await.unwrap();
-    let local_addr = conn1.local_addr()?;
-    let remote_addr = conn1.peer_addr()?;
-    conn1
-        .write_all(format!("GET / HTTP/1.0\r\nHost: {host}\r\n\r\n").as_bytes())
-        .await?;
-    println!("{local_addr} -> {remote_addr}");
-    let mut response_buf: String = String::new();
-    let _rx_bytes = conn1.read_to_string(&mut response_buf).await?;
-    println!("{local_addr} <- {remote_addr}");
+    for _ in 0..10 {
+        // acquire connection from pool
+        let cx = &mut pool.get().await.unwrap();
+        let local_addr = cx.local_addr()?;
+        let remote_addr = cx.peer_addr()?;
+        println!("{local_addr} -> {remote_addr}");
 
-    // on drop, pool does not close the connection
-    dbg!(drop(conn1));
+        // task::sleep(time::Duration::from_millis(10)).await; // #1
 
-    // on acquire, existing connection is used
-    let mut conn2 = pool.get().await.unwrap();
-    let local_addr = conn2.local_addr()?;
-    let remote_addr = conn2.peer_addr()?;
-    conn2
-        .write_all(format!("GET / HTTP/1.0\r\nHost: {host}\r\n\r\n").as_bytes())
-        .await?;
-    println!("{local_addr} -> {remote_addr}");
-    let mut response_buf: String = String::new();
-    let _rx_bytes = conn2.read_to_string(&mut response_buf).await?;
-    println!("{local_addr} <- {remote_addr}");
+        // dbg!(&req);
+        cx.write_all(req.as_bytes()).await?;
+        cx.flush().await?;
 
-    // a new connection will be opened
-    let mut conn3 = pool.get().await.unwrap();
-    let local_addr = conn3.local_addr()?;
-    let remote_addr = conn3.peer_addr()?;
-    conn3
-        .write_all(format!("GET / HTTP/1.0\r\nHost: {host}\r\n\r\n").as_bytes())
-        .await?;
-    println!("{local_addr} -> {remote_addr}");
-    let mut response_buf: String = String::new();
-    let _rx_bytes = conn3.read_to_string(&mut response_buf).await?;
-    println!("{local_addr} <- {remote_addr}");
+        // task::sleep(time::Duration::from_millis(20)).await; // #2
 
+        let mut response_buf = String::new();
+        println!("{local_addr} <- {remote_addr}");
+        let rx_bytes = cx.read_to_string(&mut response_buf).await?;
+        dbg!(rx_bytes);
+        // dbg!(response_buf);
+
+        // task::sleep(time::Duration::from_millis(40)).await; // #3
+
+        // force release connection
+        // let _ = TcpConnectionObject::take(cx);
+    }
     Ok(())
 }
